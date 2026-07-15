@@ -48,20 +48,32 @@ terraform apply -var-file=terraform.tfvars
 
 ## Integrating into the main SRA config (`aws/tf`)
 
-If you want this managed alongside the rest of your deployment instead of as a separate root, fold it into `aws/tf` as a module. This keeps a single `terraform apply` and lets the endpoint service flow straight into the NCC.
+If you want this managed alongside the rest of your deployment instead of as a separate root, fold it into `aws/tf` as a module. This keeps a single `terraform apply` and lets the endpoint service flow straight into the NCC. Because the main config is region- and shard-aware, the module inherits `region` and `databricks_gov_shard` from the existing root variables — no duplicate environment toggle.
 
-**1. Add it as a module.** Copy the resource files into a module directory — everything **except** `versions.tf` (the AWS provider and `terraform {}` block already exist in `aws/tf`; a module must not redeclare them):
-
-```bash
-mkdir -p aws/tf/modules/serverless_privatelink_to_kafka
-cp aws/customizations/serverless_privatelink/kafka/{main.tf,variables.tf,outputs.tf} \
-   aws/tf/modules/serverless_privatelink_to_kafka/
-```
-
-**2. Call the module from `aws/tf`** (e.g. in a new `aws/tf/kafka_privatelink.tf`), reusing the root variables so it inherits the deployment's environment automatically. Because the main config is region- and shard-aware, `region` and `databricks_gov_shard` come straight from the existing root vars — no duplicate env toggle:
-
+1. Create a new directory `modules/serverless_privatelink_to_kafka`
+2. Copy `main.tf`, `variables.tf`, and `outputs.tf` from `customizations/serverless_privatelink/kafka` into the new directory. Do **not** copy `versions.tf` — the AWS provider and `terraform {}` block already exist in `aws/tf` and a module must not redeclare them.
+3. Add the following variables to `variables.tf`:
 ```hcl
-# Opt-in: create the internal NLB + VPC endpoint service fronting an internal Kafka cluster
+variable "enable_kafka_privatelink" {
+  description = "Create the internal NLB and VPC endpoint service fronting an internal Kafka cluster for serverless PrivateLink."
+  type        = bool
+  default     = false
+}
+
+variable "kafka_brokers" {
+  description = "Kafka brokers to expose through the NLB. Each broker is advertised on its own dedicated nlb_port."
+  type = list(object({
+    name       = string
+    ip_address = string
+    port       = optional(number, 9094)
+    nlb_port   = number
+  }))
+  default = []
+}
+```
+4. Create a new file `kafka_privatelink.tf`
+5. Add the following code block into `kafka_privatelink.tf`:
+```hcl
 module "serverless_privatelink_to_kafka" {
   count  = var.enable_kafka_privatelink ? 1 : 0
   source = "./modules/serverless_privatelink_to_kafka"
@@ -73,19 +85,13 @@ module "serverless_privatelink_to_kafka" {
   resource_prefix      = var.resource_prefix
   databricks_gov_shard = var.databricks_gov_shard
 
-  vpc_id         = module.vpc[0].vpc_id       # or your custom_vpc_id
+  vpc_id         = module.vpc[0].vpc_id        # or var.custom_vpc_id
   nlb_subnet_ids = module.vpc[0].intra_subnets # place the NLB in the PrivateLink subnets
   brokers        = var.kafka_brokers
 }
 ```
-
-Add matching root variables to `aws/tf/variables.tf` (`enable_kafka_privatelink`, `kafka_brokers`) and values to your root tfvars. `resource_prefix` in the main config can be long, so mind the 32-char target-group name budget noted below.
-
-**3. Wire the endpoint service into the NCC automatically.** The NCC module already consumes `var.serverless_private_endpoint_rules` (see [`aws/tf/main.tf`](../../../tf/main.tf)). Append this module's endpoint service to that list so the private endpoint rule is created in the same apply — change the `private_endpoint_rules` argument on the `network_connectivity_configuration` module in `aws/tf/main.tf`:
-
+6. Wire the endpoint service into the NCC so the private endpoint rule is created in the same apply. In `main.tf`, replace the `private_endpoint_rules` argument on the `network_connectivity_configuration` module (line 24) with:
 ```hcl
-module "network_connectivity_configuration" {
-  # ...
   private_endpoint_rules = concat(
     var.serverless_private_endpoint_rules,
     var.enable_kafka_privatelink ? [{
@@ -93,14 +99,14 @@ module "network_connectivity_configuration" {
       domain_names     = ["kafka.example.internal"] # private DNS clients use to reach the brokers
     }] : [],
   )
-}
 ```
+7. Set `enable_kafka_privatelink = true` and `kafka_brokers = [...]` in your root `terraform.tfvars`, then `terraform apply`.
 
-**4. Accept the connection.** The NCC rule stays **PENDING** until you accept the connection request on the VPC endpoint service (step 5), because `acceptance_required = true`. Terraform creates both sides, but acceptance is a manual/out-of-band step (or a follow-up `aws_vpc_endpoint_connection_accepter`).
+> **Note:** `resource_prefix` in the main config can be long — mind the 32-char target-group name budget noted below.
 
-> **Ordering note:** the endpoint service (this module) must exist before the NCC rule references its name. With the `concat(...)` above, Terraform infers that dependency automatically from `module.serverless_privatelink_to_kafka[0].vpc_endpoint_service_name`.
+> **Accepting the connection:** the NCC rule stays **PENDING** until you accept the connection request on the VPC endpoint service (step 5), because `acceptance_required = true`. Terraform creates both sides, but acceptance is a manual/out-of-band step (or a follow-up `aws_vpc_endpoint_connection_accepter`). The endpoint service must exist before the NCC rule references its name; with the `concat(...)` above, Terraform infers that dependency automatically.
 
-If you'd rather keep the two loosely coupled, skip steps 2–3 and just use the [standalone flow](#wiring-into-databricks-steps-3) — apply this customization on its own, then paste its `vpc_endpoint_service_name` into the root `serverless_private_endpoint_rules` tfvars value by hand.
+If you'd rather keep the two loosely coupled, skip steps 1–6 and just use the [standalone flow](#wiring-into-databricks-steps-3) — apply this customization on its own, then paste its `vpc_endpoint_service_name` into the root `serverless_private_endpoint_rules` tfvars value by hand.
 
 ## Kafka `advertised.listeners`
 

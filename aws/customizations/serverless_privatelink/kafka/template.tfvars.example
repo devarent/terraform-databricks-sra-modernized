@@ -5,7 +5,7 @@
 # AWS region for deployment. Determines the environment: commercial (e.g.
 # us-east-1) or GovCloud (us-gov-west-1), and thus which Databricks serverless
 # private-connectivity role is allowlisted on the VPC endpoint service.
-region = "us-gov-west-1"
+region = ""
 
 # GovCloud shard: "civilian" or "dod". Required when region is us-gov-west-1;
 # leave null (or omit) for commercial regions.
@@ -49,5 +49,5 @@ brokers = [
 # simplified allow-all approach from the Databricks docs.
 # allowed_principals = ["*"]
 
-# Optional: require manual acceptance of connection requests (recommended).
-# acceptance_required = true
+# Require manual acceptance of connection requests (recommended).
+acceptance_required = true
