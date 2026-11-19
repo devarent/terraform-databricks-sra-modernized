@@ -87,3 +87,10 @@ gcp/modules/service_account/*.json
 
 # Currently unused releaserc file
 /.releaserc
+
+# Modern CI ignores
+.env
+*.log
+node_modules/
+target/
+.terraform/

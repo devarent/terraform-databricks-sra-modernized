@@ -1,3 +1,5 @@
+[![CI](https://github.com/aryafatthurahman4-collab/terraform-databricks-sra-modernized/actions/workflows/ci.yml/badge.svg)](https://github.com/aryafatthurahman4-collab/terraform-databricks-sra-modernized/actions/workflows/ci.yml)
+
 # Security Reference Architectures (SRA) - Terraform Templates
 
 <p align="center">

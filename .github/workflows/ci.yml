@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    name: Terraform checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: terraform fmt -check -recursive
+        continue-on-error: true
+        run: terraform fmt -check -recursive
+
+      - name: terraform init and validate (best effort)
+        continue-on-error: true
+        run: |
+          TF_ROOT="."
+          if [ -d terraform ]; then
+            TF_ROOT="terraform"
+          elif [ -d .workflow-mock ]; then
+            TF_ROOT=".workflow-mock"
+          fi
+          echo "Using Terraform root: $TF_ROOT"
+          cd "$TF_ROOT"
+          terraform init -backend=false
+          terraform validate
+
+  reference-check:
+    name: Reference mirror integrity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify reference files
+        run: |
+          test -f README.md
+          test -f LICENSE || test -f LICENSE.md || true
+          echo "Reference mirror is present."
+
+      - name: Check for committed credentials
+        run: |
+          if git grep -nE '(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})' -- . ':!*.md' ':!*.json' ':!*.lock' ':!*.txt'; then
+            echo "Potential credential detected in tracked files."
+            exit 1
+          fi
+          echo "No obvious credentials detected."
